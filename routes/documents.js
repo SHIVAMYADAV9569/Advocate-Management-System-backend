@@ -10,6 +10,7 @@ const {
   updateDocument,
   deleteDocument,
   shareDocument,
+  getDocumentPreview,
   upload
 } = require('../controllers/documentController');
 
@@ -27,6 +28,9 @@ router.get('/', getDocuments);
 
 // Get single document
 router.get('/:id', getDocument);
+
+// Get document preview/thumbnail
+router.get('/:id/preview', getDocumentPreview);
 
 // Download document
 router.get('/:id/download', downloadDocument);

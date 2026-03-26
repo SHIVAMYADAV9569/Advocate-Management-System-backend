@@ -1,47 +1,17 @@
 const { Document, Case, Client } = require('../models');
-const multer = require('multer');
+const { uploadToCloudinary, cloudinary, upload } = require('../config/cloudinary');
+const { deleteFromCloudinary, generateSignedUrl } = require('../utils/cloudinaryHelper');
 const path = require('path');
 const fs = require('fs');
-
-// Create uploads directory if it doesn't exist
-const uploadsDir = path.join(__dirname, '../uploads');
-if (!fs.existsSync(uploadsDir)) {
-  fs.mkdirSync(uploadsDir, { recursive: true });
-}
-
-// Configure Multer for file uploads to local storage
-const storage = multer.diskStorage({
-  destination: (req, file, cb) => {
-    cb(null, uploadsDir);
-  },
-  filename: (req, file, cb) => {
-    // Create unique filename
-    const uniqueSuffix = Date.now() + '-' + Math.round(Math.random() * 1E9);
-    cb(null, uniqueSuffix + path.extname(file.originalname));
-  }
-});
-
-const upload = multer({
-  storage,
-  limits: {
-    fileSize: 10 * 1024 * 1024, // 10MB limit
-  },
-  fileFilter: (req, file, cb) => {
-    const allowedTypes = /jpeg|jpg|png|gif|pdf|doc|docx/;
-    const extname = allowedTypes.test(path.extname(file.originalname).toLowerCase());
-    const mimetype = allowedTypes.test(file.mimetype);
-
-    if (mimetype && extname) {
-      return cb(null, true);
-    } else {
-      cb(new Error('Only images and PDFs are allowed'));
-    }
-  },
-});
 
 // Upload Document
 exports.uploadDocument = async (req, res) => {
   try {
+    console.log('📤 Upload request received');
+    console.log('   User:', req.user ? req.user._id : 'Not authenticated');
+    console.log('   File:', req.file ? req.file.originalname : 'No file');
+    console.log('   Body:', req.body);
+
     const { caseId, clientId, name, type, category, description, isConfidential } = req.body;
 
     if (!req.file) {
@@ -72,10 +42,26 @@ exports.uploadDocument = async (req, res) => {
       }
     }
 
-    // Get file info
-    const fileUrl = `/uploads/${req.file.filename}`;
-    const fileSize = req.file.size;
+    // Upload file to Cloudinary
+    console.log('⬆️ Uploading file to Cloudinary...');
+    const cloudinaryResourceType = req.file.mimetype.startsWith('image/') ? 'image' : 'raw';
+    const cloudinaryResult = await uploadToCloudinary(req.file.buffer, req.file.originalname, cloudinaryResourceType);
+    console.log('✅ File uploaded to Cloudinary:', cloudinaryResult.secure_url);
+
+    // Get file info from Cloudinary
+    const fileUrl = cloudinaryResult.secure_url;
+    const publicId = cloudinaryResult.public_id;
+    const fileSize = cloudinaryResult.bytes || req.file.size;
     const fileFormat = path.extname(req.file.originalname).substring(1);
+    const resourceType = cloudinaryResourceType;
+
+    console.log('📄 File details:', {
+      url: fileUrl,
+      publicId: publicId,
+      size: fileSize,
+      format: fileFormat,
+      resourceType: resourceType
+    });
 
     // Create document record in separate Document collection
     const document = new Document({
@@ -86,9 +72,10 @@ exports.uploadDocument = async (req, res) => {
       type: type || 'other',
       category: category || 'general',
       url: fileUrl,
-      publicId: req.file.filename, // Use filename as publicId
+      publicId: publicId,
       format: fileFormat,
       size: fileSize,
+      resourceType: resourceType,
       description: description || '',
       isConfidential: isConfidential || false,
     });
@@ -103,22 +90,39 @@ exports.uploadDocument = async (req, res) => {
             name: name || req.file.originalname,
             type: type || 'other',
             url: fileUrl,
+            publicId: publicId, // IMPORTANT: Store publicId for deletion
             uploadedAt: new Date()
           }
         }
       });
+      console.log(`📄 Document added to case ${caseId} documents array`);
     }
+
+    console.log('✅ Document saved to database:', document._id);
 
     res.status(201).json({
       success: true,
-      message: 'Document uploaded successfully',
+      message: 'Document uploaded successfully to Cloudinary',
       data: document
     });
   } catch (error) {
-    console.error('Error uploading document:', error);
+    console.error('❌ Error uploading document:', error);
+    console.error('Stack trace:', error.stack);
+    
+    // If Cloudinary upload failed, delete the uploaded file
+    if (req.file && req.file.filename) {
+      try {
+        const resourceType = req.file.mimetype.startsWith('image/') ? 'image' : 'raw';
+        await cloudinary.uploader.destroy(req.file.filename, { resource_type: resourceType });
+        console.log('🗑️ Cleaned up failed upload from Cloudinary');
+      } catch (deleteError) {
+        console.error('Error deleting failed upload:', deleteError);
+      }
+    }
+    
     res.status(500).json({
       success: false,
-      message: error.message
+      message: error.message || 'Upload failed. Please try again.'
     });
   }
 };
@@ -246,23 +250,29 @@ exports.downloadDocument = async (req, res) => {
     document.lastDownloaded = new Date();
     await document.save();
 
-    // Check if file exists
-    const filePath = path.join(__dirname, '..', document.url);
-    if (!fs.existsSync(filePath)) {
-      return res.status(404).json({
-        success: false,
-        message: 'File not found on server'
+    // Generate signed URL for secure download (optional, for private files)
+    let downloadUrl = document.url;
+    
+    // If document is confidential, generate a signed URL with expiration
+    if (document.isConfidential) {
+      const resourceType = document.resourceType || 'raw';
+      const signedUrl = cloudinary.url(document.publicId, {
+        resource_type: resourceType,
+        secure: true,
+        expires_at: Math.floor(Date.now() / 1000) + 3600, // 1 hour expiration
+        sign_url: true
       });
+      downloadUrl = signedUrl;
     }
 
-    // Return file URL for frontend to handle download
     res.status(200).json({
       success: true,
       data: {
-        url: document.url,
+        url: downloadUrl,
         name: document.name,
         format: document.format,
-        size: document.size
+        size: document.size,
+        isConfidential: document.isConfidential
       }
     });
   } catch (error) {
@@ -354,10 +364,29 @@ exports.deleteDocument = async (req, res) => {
       });
     }
 
-    // Delete file from local storage
-    const filePath = path.join(__dirname, '..', document.url);
-    if (fs.existsSync(filePath)) {
-      fs.unlinkSync(filePath);
+    // Delete file from Cloudinary
+    try {
+      const resourceType = document.resourceType || 'raw';
+      await cloudinary.uploader.destroy(document.publicId, { resource_type: resourceType });
+      console.log(`Deleted ${resourceType} from Cloudinary: ${document.publicId}`);
+    } catch (cloudinaryError) {
+      console.error('Error deleting from Cloudinary:', cloudinaryError);
+      // Continue with database deletion even if Cloudinary deletion fails
+    }
+
+    // Remove from case's embedded documents array if associated with a case
+    if (document.case) {
+      console.log(`🗑️ Attempting to remove document from case: ${document.case}`);
+      console.log(`   Document publicId: ${document.publicId}`);
+      
+      const updateResult = await Case.findByIdAndUpdate(document.case, {
+        $pull: {
+          documents: { publicId: document.publicId }
+        }
+      });
+      
+      console.log(`✅ Case update result:`, updateResult ? 'Success' : 'Failed');
+      console.log(`Removed document from case tracking: ${document.case}`);
     }
 
     // Delete from database
@@ -365,7 +394,7 @@ exports.deleteDocument = async (req, res) => {
 
     res.status(200).json({
       success: true,
-      message: 'Document deleted successfully'
+      message: 'Document deleted successfully from Cloudinary and database'
     });
   } catch (error) {
     console.error('Error deleting document:', error);
@@ -419,6 +448,83 @@ exports.shareDocument = async (req, res) => {
       data: document
     });
   } catch (error) {
+    res.status(500).json({
+      success: false,
+      message: error.message
+    });
+  }
+};
+
+// Get Document Preview/Thumbnail
+exports.getDocumentPreview = async (req, res) => {
+  try {
+    const { id } = req.params;
+    const document = await Document.findById(id);
+
+    if (!document) {
+      return res.status(404).json({
+        success: false,
+        message: 'Document not found'
+      });
+    }
+
+    // Check access permissions
+    if (req.user.role === 'client') {
+      const hasAccess = document.client && document.client.toString() === req.user._id.toString() ||
+                       document.sharedWith.includes(req.user._id);
+      
+      if (!hasAccess && document.isConfidential) {
+        return res.status(403).json({
+          success: false,
+          message: 'Access denied'
+        });
+      }
+    }
+
+    // Generate preview URL based on resource type
+    let previewUrl = document.url;
+    
+    if (document.resourceType === 'image') {
+      // For images, return a resized thumbnail
+      previewUrl = cloudinary.url(document.publicId, {
+        resource_type: 'image',
+        secure: true,
+        width: 300,
+        height: 200,
+        crop: 'fill',
+        quality: 'auto'
+      });
+    } else if (document.format === 'pdf') {
+      // For PDFs, return the first page as image
+      previewUrl = cloudinary.url(document.publicId, {
+        resource_type: 'image',
+        secure: true,
+        format: 'jpg',
+        width: 300,
+        height: 400,
+        crop: 'fill',
+        quality: 'auto',
+        page: 1
+      });
+    } else {
+      // For other documents, return a generic icon or the original if small
+      previewUrl = cloudinary.url(document.publicId, {
+        resource_type: document.resourceType || 'raw',
+        secure: true
+      });
+    }
+
+    res.status(200).json({
+      success: true,
+      data: {
+        previewUrl,
+        name: document.name,
+        format: document.format,
+        resourceType: document.resourceType
+      }
+    });
+  } catch (error) {
+    console.error('Error getting document preview:', error);
     res.status(500).json({
       success: false,
       message: error.message

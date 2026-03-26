@@ -38,6 +38,11 @@ const documentSchema = new mongoose.Schema({
   },
   format: String,
   size: Number,
+  resourceType: {
+    type: String,
+    enum: ['image', 'raw', 'video', 'auto'],
+    default: 'raw'
+  },
   tags: [String],
   description: String,
   isConfidential: {

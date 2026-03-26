@@ -55,6 +55,11 @@ const trackCase = async (req, res) => {
     .populate('advocate', 'name email phone barNumber')
     .select('-timeline -fee -__v');
 
+    console.log('📄 Case documents found:', caseData.documents?.length || 0);
+    if (caseData.documents && caseData.documents.length > 0) {
+      console.log('📄 Document list:', caseData.documents.map(d => ({ name: d.name, publicId: d.publicId })));
+    }
+
     // Get hearings for this case
     const hearings = await Hearing.find({ 
       case: caseData._id
@@ -96,7 +101,8 @@ const trackCase = async (req, res) => {
         name: caseData.advocate?.name,
         barNumber: caseData.advocate?.barNumber
       },
-      documents: caseData.documents?.map(doc => ({
+      documents: caseData.documents?.map((doc, index) => ({
+        _id: doc._id || `embedded-${index}`, // Add unique ID for React keys
         name: doc.name,
         format: doc.type?.toUpperCase() || 'DOC',
         size: 0, // Embedded docs don't have size
@@ -144,6 +150,8 @@ const trackCase = async (req, res) => {
       createdAt: caseData.createdAt,
       updatedAt: caseData.updatedAt
     };
+
+    console.log('📋 Documents returned to frontend:', publicCaseInfo.documents.length);
 
     res.status(200).json({
       success: true,
