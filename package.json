@@ -12,7 +12,6 @@
   "author": "",
   "license": "ISC",
   "dependencies": {
-    "@google/genai": "^1.50.1",
     "bcryptjs": "^3.0.3",
     "cloudinary": "^1.41.3",
     "cors": "^2.8.6",
@@ -25,7 +24,6 @@
     "multer-storage-cloudinary": "^4.0.0",
     "nodemailer": "^8.0.1",
     "nodemon": "^3.1.14",
-    "openai": "^6.34.0",
     "razorpay": "^2.9.6",
     "uuid": "^13.0.0"
   }
