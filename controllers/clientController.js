@@ -1,4 +1,4 @@
-const { Client, Case, Payment } = require('../models');
+const { Client, Case, Payment, Notification } = require('../models');
 
 // Get all clients
 exports.getClients = async (req, res) => {
@@ -156,6 +156,9 @@ exports.updateClient = async (req, res) => {
 // Delete client
 exports.deleteClient = async (req, res) => {
   try {
+    console.log('🗑️ Delete client request:', req.params.id);
+    console.log('👤 User:', req.user.id);
+    
     const client = await Client.findOne({
       _id: req.params.id,
       advocate: req.user.id
@@ -177,20 +180,41 @@ exports.deleteClient = async (req, res) => {
     if (activeCases > 0) {
       return res.status(400).json({
         success: false,
-        message: 'Cannot delete client with active cases'
+        message: 'Cannot delete client with active cases. Please close or reassign cases first.'
       });
     }
 
+    const clientName = client.name;
+    
+    // Delete the client
     await client.deleteOne();
+    console.log('✅ Client deleted successfully:', clientName);
+
+    // Create notification
+    try {
+      await Notification.create({
+        recipient: req.user.id,
+        type: 'client',
+        title: 'Client Deleted',
+        message: `Client "${clientName}" has been deleted successfully`,
+        relatedTo: { model: 'Client', id: client._id },
+        priority: 'medium'
+      });
+      console.log('✅ Notification created');
+    } catch (notifError) {
+      console.log('⚠️ Warning: Could not create notification:', notifError.message);
+    }
 
     res.status(200).json({
       success: true,
       message: 'Client deleted successfully'
     });
   } catch (error) {
+    console.error('❌ Delete client error:', error);
+    console.error('❌ Error stack:', error.stack);
     res.status(500).json({
       success: false,
-      message: error.message
+      message: error.message || 'Failed to delete client'
     });
   }
 };

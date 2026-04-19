@@ -23,6 +23,6 @@ router.route('/stats')
 router.route('/:id')
   .get(getClient)
   .put(checkRole('admin', 'lawyer'), updateClient)
-  .delete(checkRole('admin'), deleteClient);
+  .delete(checkRole('admin', 'lawyer'), deleteClient);
 
 module.exports = router;

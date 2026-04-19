@@ -33,6 +33,6 @@ router.route('/pending')
 router.route('/:id')
   .get(getPayment)
   .put(checkRole('admin', 'lawyer'), updatePayment)
-  .delete(checkRole('admin'), deletePayment);
+  .delete(checkRole('admin', 'lawyer'), deletePayment);
 
 module.exports = router;

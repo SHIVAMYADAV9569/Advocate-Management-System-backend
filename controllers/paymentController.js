@@ -198,6 +198,9 @@ exports.updatePayment = async (req, res) => {
 // Delete payment
 exports.deletePayment = async (req, res) => {
   try {
+    console.log('🗑️ Delete payment request:', req.params.id);
+    console.log('👤 User:', req.user.id);
+    
     const payment = await Payment.findOne({
       _id: req.params.id,
       advocate: req.user.id
@@ -210,16 +213,60 @@ exports.deletePayment = async (req, res) => {
       });
     }
 
+    // Try to update related data, but don't fail if it errors
+    try {
+      // If payment was marked as 'paid', revert client payment stats
+      if (payment.status === 'paid' && payment.client) {
+        await Client.findByIdAndUpdate(payment.client, {
+          $inc: { totalPayments: -payment.amount }
+        });
+        console.log('✅ Client stats updated');
+      }
+
+      // If payment was linked to a case, update case fee stats
+      if (payment.case && payment.status === 'paid') {
+        const caseData = await Case.findById(payment.case);
+        if (caseData && caseData.fee) {
+          caseData.fee.paid = Math.max(0, (caseData.fee.paid || 0) - payment.amount);
+          caseData.fee.pending = (caseData.fee.total || 0) - caseData.fee.paid;
+          await caseData.save();
+          console.log('✅ Case stats updated');
+        }
+      }
+    } catch (updateError) {
+      console.log('⚠️ Warning: Could not update related data:', updateError.message);
+      // Continue with deletion even if updates fail
+    }
+
+    // Delete the payment
     await payment.deleteOne();
+    console.log('✅ Payment deleted successfully');
+
+    // Create notification
+    try {
+      await Notification.create({
+        recipient: req.user.id,
+        type: 'payment',
+        title: 'Payment Deleted',
+        message: `Payment of ₹${payment.amount} (${payment.invoiceNumber}) has been deleted`,
+        relatedTo: { model: 'Payment', id: payment._id },
+        priority: 'medium'
+      });
+      console.log('✅ Notification created');
+    } catch (notifError) {
+      console.log('⚠️ Warning: Could not create notification:', notifError.message);
+    }
 
     res.status(200).json({
       success: true,
       message: 'Payment deleted successfully'
     });
   } catch (error) {
+    console.error('❌ Delete payment error:', error);
+    console.error('❌ Error stack:', error.stack);
     res.status(500).json({
       success: false,
-      message: error.message
+      message: error.message || 'Failed to delete payment'
     });
   }
 };

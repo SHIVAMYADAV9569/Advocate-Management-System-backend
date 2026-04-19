@@ -1,4 +1,4 @@
-const { Case, Client, Hearing, Payment } = require('../models');
+const { Case, Client, Hearing, Payment, Notification } = require('../models');
 
 // Get all cases
 exports.getCases = async (req, res) => {
@@ -223,10 +223,13 @@ exports.updateCase = async (req, res) => {
 // Delete case
 exports.deleteCase = async (req, res) => {
   try {
+    console.log('🗑️ Delete case request:', req.params.id);
+    console.log('👤 User:', req.user.id);
+    
     const caseData = await Case.findOne({
       _id: req.params.id,
       advocate: req.user.id
-    });
+    }).populate('client', 'name');
 
     if (!caseData) {
       return res.status(404).json({
@@ -235,16 +238,50 @@ exports.deleteCase = async (req, res) => {
       });
     }
 
+    const caseNumber = caseData.caseNumber;
+    const caseTitle = caseData.title;
+    
+    // Delete the case
     await caseData.deleteOne();
+    console.log('✅ Case deleted successfully:', caseNumber);
+
+    // Update client total cases if client exists
+    try {
+      if (caseData.client) {
+        await Client.findByIdAndUpdate(caseData.client._id, {
+          $inc: { totalCases: -1 }
+        });
+        console.log('✅ Client stats updated');
+      }
+    } catch (updateError) {
+      console.log('⚠️ Warning: Could not update client stats:', updateError.message);
+    }
+
+    // Create notification
+    try {
+      await Notification.create({
+        recipient: req.user.id,
+        type: 'case_update',
+        title: 'Case Deleted',
+        message: `Case ${caseNumber} "${caseTitle}" has been deleted successfully`,
+        relatedTo: { model: 'Case', id: caseData._id },
+        priority: 'high'
+      });
+      console.log('✅ Notification created');
+    } catch (notifError) {
+      console.log('⚠️ Warning: Could not create notification:', notifError.message);
+    }
 
     res.status(200).json({
       success: true,
       message: 'Case deleted successfully'
     });
   } catch (error) {
+    console.error('❌ Delete case error:', error);
+    console.error('❌ Error stack:', error.stack);
     res.status(500).json({
       success: false,
-      message: error.message
+      message: error.message || 'Failed to delete case'
     });
   }
 };

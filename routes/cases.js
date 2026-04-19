@@ -24,7 +24,7 @@ router.route('/stats')
 router.route('/:id')
   .get(caseAccess, getCase)
   .put(checkRole('admin', 'lawyer'), updateCase)
-  .delete(checkRole('admin'), deleteCase);
+  .delete(checkRole('admin', 'lawyer'), deleteCase);
 
 router.route('/:id/timeline')
   .post(caseAccess, addTimeline);
