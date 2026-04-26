@@ -26,6 +26,7 @@ app.use('/api/documents', require('./routes/documents'));
 app.use('/api/dashboard', require('./routes/dashboard'));
 app.use('/api/advocates', require('./routes/advocateRoutes'));
 app.use('/api/tracking', require('./routes/tracking'));
+app.use('/api/ai-assistant', require('./routes/aiAssistant'));
 
 // MongoDB Connection
 mongoose.connect(process.env.MONGODB_URI)
